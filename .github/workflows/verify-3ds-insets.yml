@@ -1,0 +1,49 @@
+name: Verify 3DS inset regression
+on:
+  push:
+    branches: [verify/3ds-navigation-bar-insets]
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          fetch-depth: 3
+      - uses: ./.github/actions/stripe_setup
+      - name: Test corrected activities
+        run: |
+          ./gradlew :payments-core:testDebugUnitTest --tests '*Stripe3ds2TransactionActivityTest' --tests '*StripeBrowserLauncherActivityTest' --stacktrace 2>&1 | tee fixed-tests.log
+          cp -R payments-core/build/test-results/testDebugUnitTest fixed-test-results
+      - name: Prove the new tests catch the original defect
+        run: |
+          for path in payments-core/src/main/java/com/stripe/android/payments/StripeBrowserLauncherActivity.kt payments-core/src/main/java/com/stripe/android/payments/core/authentication/threeds2/Stripe3ds2TransactionActivity.kt; do
+            git show 848fd2fd2ba010c614b35fefe3901320808cb6cb:"$path" > "$path"
+          done
+          set +e
+          ./gradlew :payments-core:testDebugUnitTest --tests '*Stripe3ds2TransactionActivityTest.navigation bar inset*' --tests '*Stripe3ds2TransactionActivityTest.zero navigation bar inset*' > baseline-tests.log 2>&1
+          baseline_status=$?
+          set -e
+          test "$baseline_status" -ne 0
+          python3 - <<'PY'
+          import pathlib, xml.etree.ElementTree as ET
+          report = pathlib.Path('payments-core/build/test-results/testDebugUnitTest/TEST-com.stripe.android.payments.core.authentication.threeds2.Stripe3ds2TransactionActivityTest.xml')
+          suite = ET.parse(report).getroot()
+          assert suite.attrib['tests'] == '2', suite.attrib
+          assert suite.attrib['failures'] == '2', suite.attrib
+          assert suite.attrib['errors'] == '0', suite.attrib
+          for failure in suite.findall('testcase/failure'):
+              assert 'expected: 11' in failure.attrib['message'], failure.attrib
+          print('Both new tests detect the original horizontal-padding defect.')
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: 3ds-inset-regression-results
+          path: |
+            fixed-tests.log
+            baseline-tests.log
+            fixed-test-results/
+            payments-core/build/test-results/testDebugUnitTest/
