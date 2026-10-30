@@ -17,6 +17,18 @@ jobs:
         run: |
           ./gradlew :payments-core:testDebugUnitTest --tests '*Stripe3ds2TransactionActivityTest' --tests '*StripeBrowserLauncherActivityTest' --stacktrace 2>&1 | tee fixed-tests.log
           cp -R payments-core/build/test-results/testDebugUnitTest fixed-test-results
+          python3 - <<'PY'
+          import pathlib, xml.etree.ElementTree as ET
+          reports = list(pathlib.Path('fixed-test-results').glob('TEST-*.xml'))
+          assert len(reports) == 2, reports
+          expected = {'com.stripe.android.payments.StripeBrowserLauncherActivityTest': 1,
+                      'com.stripe.android.payments.core.authentication.threeds2.Stripe3ds2TransactionActivityTest': 4}
+          for report in reports:
+              suite = ET.parse(report).getroot()
+              assert int(suite.attrib['tests']) == expected[suite.attrib['name']], suite.attrib
+              assert suite.attrib['failures'] == suite.attrib['errors'] == suite.attrib['skipped'] == '0', suite.attrib
+          print('All five focused native tests passed without retries or skips.')
+          PY
       - name: Prove the new tests catch the original defect
         run: |
           for path in payments-core/src/main/java/com/stripe/android/payments/StripeBrowserLauncherActivity.kt payments-core/src/main/java/com/stripe/android/payments/core/authentication/threeds2/Stripe3ds2TransactionActivity.kt; do
@@ -31,11 +43,20 @@ jobs:
           import pathlib, xml.etree.ElementTree as ET
           report = pathlib.Path('payments-core/build/test-results/testDebugUnitTest/TEST-com.stripe.android.payments.core.authentication.threeds2.Stripe3ds2TransactionActivityTest.xml')
           suite = ET.parse(report).getroot()
-          assert suite.attrib['tests'] == '2', suite.attrib
-          assert suite.attrib['failures'] == '2', suite.attrib
+          cases = suite.findall('testcase')
+          expected = {'navigation bar inset is applied below content without shifting it sideways',
+                      'zero navigation bar inset preserves horizontal padding'}
+          assert {case.attrib['name'] for case in cases} == expected, suite.attrib
+          assert len(cases) >= 2, suite.attrib
+          assert int(suite.attrib['tests']) == int(suite.attrib['failures']) == len(cases), suite.attrib
           assert suite.attrib['errors'] == '0', suite.attrib
-          for failure in suite.findall('testcase/failure'):
-              assert 'expected: 11' in failure.attrib['message'], failure.attrib
+          for case in cases:
+              failures = case.findall('failure')
+              assert len(failures) == 1, case.attrib
+              message = failures[0].attrib['message']
+              assert 'expected: 11' in message, message
+              actual = 78 if case.attrib['name'].startswith('navigation bar inset') else 0
+              assert f'but was : {actual}' in message, message
           print('Both new tests detect the original horizontal-padding defect.')
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
